@@ -386,14 +386,13 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
   }
 
   override fun evaluateCandidate(resourceId: String, resourceName: String, workConfiguration: WorkConfiguration): ResourceEvaluation {
-    val candidate = getCandidate(resourceId, resourceName, workConfiguration)
-      ?: return ResourceEvaluation(
-        workConfiguration.namespace,
-        resourceId,
-        false,
-        "Resource does not exist in the given namespace",
-        emptyList()
-      )
+    val candidate = getCandidate(resourceId, resourceName, workConfiguration) ?: return ResourceEvaluation(
+      workConfiguration.namespace,
+      resourceId,
+      false,
+      "Resource does not exist in the given namespace",
+      emptyList()
+    )
 
     val resourceState = resourceStateRepository.get(resourceId, workConfiguration.namespace)
     if (resourceState != null && resourceState.optedOut) {
@@ -570,7 +569,7 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
           if (!partition.isEmpty()) {
             try {
               deleteResources(partition, workConfiguration)
-              sendDeleteEvents(partition, workConfiguration)
+              sendDeleteEvents(partition, w)
               candidateCounter.addAndGet(partition.size)
             } catch (e: Exception) {
               log.error("Failed to delete $it. Configuration: {}", workConfiguration.toLog(), e)
@@ -627,8 +626,7 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
       candidate.apply {
         set(
           resourceOwnerField,
-          ownerResolver.resolve(candidate)
-            ?: workConfiguration.notificationConfiguration.defaultDestination
+          ownerResolver.resolve(candidate) ?: workConfiguration.notificationConfiguration.defaultDestination
         )
       }
     }
@@ -758,8 +756,7 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
   private fun sendDeleteEvents(
     resources: List<MarkedResource>,
     workConfiguration: WorkConfiguration
-  ) {
-    resources.forEach { applicationEventPublisher.publishEvent(DeleteResourceEvent(it, workConfiguration)) }
+  ) { resources.forEach { applicationEventPublisher.publishEvent(DeleteResourceEvent(it, workConfiguration)) }
   }
 
   private val Int.days: Period
