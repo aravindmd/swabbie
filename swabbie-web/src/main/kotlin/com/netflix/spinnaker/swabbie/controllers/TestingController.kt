@@ -86,6 +86,22 @@ class TestingController(
     handler.deleteResource(resourceId, workConfiguration)
   }
 
+  /**
+   *  For testing notification
+   */
+  @RequestMapping(value = ["/notify/{namespace}/{resourceId}"], method = [RequestMethod.POST])
+  fun notify(@PathVariable resourceId: String,
+             @PathVariable namespace: String,
+             @RequestBody markInformation: OnDemandMarkData
+  ) {
+    val workConfiguration = findWorkConfiguration(SwabbieNamespace.namespaceParser(namespace))
+    val handler = resourceTypeHandlers.find { handler ->
+      handler.handles(workConfiguration)
+    } ?: throw NotFoundException("No handlers for $namespace")
+
+    handler.notify(workConfiguration)
+  }
+
   private fun findWorkConfiguration(namespace: SwabbieNamespace): WorkConfiguration {
     return workConfigurations.find { workConfiguration ->
       workConfiguration.account.name == namespace.accountName &&

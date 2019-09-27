@@ -677,15 +677,21 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
           } else {
             owner
           }
-
+          val applicationName = resources.first().resource.grouping?.value.orEmpty()
+          val url = workConfiguration.notificationConfiguration.resourceUrl + "applications/" +
+            applicationName + "/clusters/serverGroupDetails/" +
+            workConfiguration.cloudProvider.toLowerCase() + "/" +
+            workConfiguration.account.environment.toLowerCase() + "/" +
+            workConfiguration.location + "/"
           val notificationContext = mapOf(
             "resourceOwner" to finalOwner,
-            "application" to resources.first().resource.grouping?.value.orEmpty(), // todo eb: this prob shouldn't be called app
+            "application" to applicationName, // todo eb: this prob shouldn't be called app
             "resources" to resources.map { it.barebones() },
             "configuration" to workConfiguration,
             "resourceType" to workConfiguration.resourceType.formatted(),
-            "spinnakerLink" to workConfiguration.notificationConfiguration.resourceUrl,
-            "optOutLink" to workConfiguration.notificationConfiguration.optOutBaseUrl
+            "spinnakerLink" to url,
+            "optOutLink" to workConfiguration.notificationConfiguration.optOutBaseUrl,
+            "slackChannelLink" to workConfiguration.notificationConfiguration.slackChannelLink
           )
 
           retrySupport.retry({
