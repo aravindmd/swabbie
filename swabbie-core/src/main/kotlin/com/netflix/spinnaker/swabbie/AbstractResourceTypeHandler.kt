@@ -37,7 +37,6 @@ import com.netflix.spinnaker.swabbie.model.OnDemandMarkData
 import com.netflix.spinnaker.swabbie.model.Resource
 import com.netflix.spinnaker.swabbie.model.ResourceEvaluation
 import com.netflix.spinnaker.swabbie.model.ResourceState
-import com.netflix.spinnaker.swabbie.model.Rule
 import com.netflix.spinnaker.swabbie.model.Status
 import com.netflix.spinnaker.swabbie.model.Summary
 import com.netflix.spinnaker.swabbie.model.WorkConfiguration
@@ -47,6 +46,7 @@ import com.netflix.spinnaker.swabbie.notifications.Notifier
 import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
 import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.ResourceUseTrackingRepository
+import com.netflix.spinnaker.swabbie.rules.RulesEngine
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
@@ -54,9 +54,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.Period
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
-import java.time.temporal.ChronoUnit.DAYS
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
@@ -64,7 +62,7 @@ import kotlin.math.min
 abstract class AbstractResourceTypeHandler<T : Resource>(
   private val registry: Registry,
   val clock: Clock,
-  private val rules: List<Rule<T>>,
+  private val rulesEngine: RulesEngine,
   private val resourceRepository: ResourceTrackingRepository,
   private val resourceStateRepository: ResourceStateRepository,
   private val exclusionPolicies: List<ResourceExclusionPolicy>,
@@ -232,6 +230,9 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
         .filter { it.markedResource.namespace == workConfiguration.namespace && it.optedOut }
 
       val preProcessedCandidates = candidates
+        .sortedBy {
+          it.createTs
+        }
         .withResolvedOwners(workConfiguration)
         .also { preProcessCandidates(it, workConfiguration) }
         .filter { !shouldExcludeResource(it, workConfiguration, optedOutResourceStates, Action.MARK) }
@@ -245,7 +246,7 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
         }
 
         try {
-          val violations: List<Summary> = candidate.getViolations()
+          val violations: List<Summary> = getViolations(candidate, workConfiguration)
           val alreadyMarkedCandidate = markedCandidates.find { it.resourceId == candidate.resourceId }
           when {
             violations.isEmpty() -> {
@@ -293,7 +294,7 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
         violationCounter,
         candidateCounter,
         totalResourcesVisitedCounter,
-        resourceRepository.getNumMarkedResources()
+        markedResources.size.toLong()
       )
     }
   }
@@ -353,13 +354,13 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
     }
 
     val preprocessedCandidate = preProcessCandidates(candidates, workConfiguration).first()
-    val wouldMark = preprocessedCandidate.getViolations().isNotEmpty()
+    val wouldMark = getViolations(preprocessedCandidate, workConfiguration).isNotEmpty()
     return ResourceEvaluation(
       workConfiguration.namespace,
       resourceId,
       wouldMark,
       if (wouldMark) "Resource has violations" else "Resource does not have violations",
-      preprocessedCandidate.getViolations()
+      getViolations(preprocessedCandidate, workConfiguration)
     )
   }
 
@@ -425,12 +426,16 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
     optedOutResourceStates: List<ResourceState>,
     action: Action
   ): Boolean {
-    if (resource.getViolations().any { summary -> summary.ruleName == AlwaysCleanRule::class.java.simpleName }) {
+    val hasAlwaysCleanRule = rulesEngine.getRules(workConfiguration)
+        .any { rule ->
+          rule.name() == AlwaysCleanRule::class.java.simpleName
+        }
+
+    if (hasAlwaysCleanRule || resource.expired(clock)) {
       return false
     }
 
-    val creationDate = Instant.ofEpochMilli(resource.createTs).atZone(ZoneId.systemDefault()).toLocalDate()
-    if (action != Action.NOTIFY && DAYS.between(creationDate, LocalDate.now()) < workConfiguration.maxAge) {
+    if (action != Action.NOTIFY && resource.age(clock).toDays() < workConfiguration.maxAge) {
       log.debug("Excluding resource (newer than {} days) {}", workConfiguration.maxAge, resource)
       exclusionCounters[action]?.incrementAndGet()
       return true
@@ -481,13 +486,16 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
           candidate.resourceId == r.resourceId
         }
       }
+      .sortedBy {
+        it.createTs
+      }
       .withResolvedOwners(workConfiguration)
       .also { preProcessCandidates(it, workConfiguration) }
 
     val confirmedResourcesToDelete = currentMarkedResourcesToDelete.filter { resource ->
       var shouldSkip = false
       val candidate = processedCandidates.find { it.resourceId == resource.resourceId }
-      if ((candidate == null || candidate.getViolations().isEmpty()) ||
+      if ((candidate == null || getViolations(candidate, workConfiguration).isEmpty()) ||
         shouldExcludeResource(candidate, workConfiguration, optedOutResourceStates, Action.DELETE)) {
         shouldSkip = true
         ensureResourceUnmarked(resource, workConfiguration, "Resource no longer qualifies for deletion")
@@ -498,10 +506,14 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
     val maxItemsToProcess = min(confirmedResourcesToDelete.size, workConfiguration.getMaxItemsProcessedPerCycle(dynamicConfigService))
     confirmedResourcesToDelete.subList(0, maxItemsToProcess).let {
       partitionList(it, workConfiguration).forEach { partition ->
-        if (!partition.isEmpty()) {
+        if (partition.isNotEmpty()) {
           try {
             deleteResources(partition, workConfiguration)
-            partition.forEach { it -> applicationEventPublisher.publishEvent(DeleteResourceEvent(it, workConfiguration)) }
+            partition.forEach { markedResource ->
+              applicationEventPublisher.publishEvent(DeleteResourceEvent(markedResource, workConfiguration))
+              resourceRepository.remove(markedResource)
+            }
+
             candidateCounter.addAndGet(partition.size)
           } catch (e: Exception) {
             log.error("Failed to delete $it. Configuration: {}", workConfiguration.toLog(), e)
@@ -540,10 +552,8 @@ abstract class AbstractResourceTypeHandler<T : Resource>(
     return partitions.sortedByDescending { it.size }
   }
 
-  private fun T.getViolations(): List<Summary> {
-    return rules.mapNotNull {
-      it.apply(this).summary
-    }
+  override fun getViolations(resource: T, workConfiguration: WorkConfiguration): List<Summary> {
+    return rulesEngine.evaluate(resource, workConfiguration)
   }
 
   /**

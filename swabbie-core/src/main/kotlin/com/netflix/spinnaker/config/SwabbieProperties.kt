@@ -133,6 +133,106 @@ class ResourceTypeConfiguration {
   var entityTaggingEnabled: Boolean = false
   var maxAge: Int = 14
   var notification: NotificationConfiguration = EmptyNotificationConfiguration()
+  var enabledRules: Set<RuleConfiguration> = setOf()
+
+  /**
+   * Allows to specify enabled rules. When defined, all other rules are ignored at runtime.
+   * See [com.netflix.spinnaker.swabbie.rules.RulesEngine.evaluate]
+   *------------- config snippet for a resource type---------------
+          enabledRules:
+          - operator: AND
+            description: Images with packer tags that are expired
+            rules:
+            - name: ExpiredResourceRule
+            - name: AttributeRule
+              parameters:
+                description: pattern:^packer-build
+   *----------------
+   * @property operator ([RuleConfiguration.OPERATOR.OR], [RuleConfiguration.OPERATOR.AND]) dictate how rules are applied
+   * @property rules a list of named rules [com.netflix.spinnaker.swabbie.model.Rule]
+   */
+  class RuleConfiguration {
+    enum class OPERATOR {
+      OR, // applies if any specified rule applies
+      AND // applies only if all specified rules apply
+    }
+
+    var operator: OPERATOR = OPERATOR.OR
+    var description: String = ""
+    var rules: Set<RuleDefinition> = emptySet()
+    override fun equals(other: Any?): Boolean {
+      if (this === other) {
+        return true
+      }
+
+      if (javaClass != other?.javaClass) {
+        return false
+      }
+
+      other as RuleConfiguration
+
+      if (operator != other.operator) {
+        return false
+      }
+
+      if (description != other.description) {
+        return false
+      }
+
+      if (rules != other.rules) {
+        return false
+      }
+
+      return true
+    }
+
+    override fun hashCode(): Int {
+      var result = operator.hashCode()
+      result = 31 * result + description.hashCode()
+      result = 31 * result + rules.hashCode()
+      return result
+    }
+
+    override fun toString(): String {
+      return "RuleConfiguration(operator=$operator, description='$description', rules=$rules)"
+    }
+  }
+
+  class RuleDefinition {
+    var name: String = ""
+    var parameters: Map<String, Any?> = mapOf()
+
+    override fun equals(other: Any?): Boolean {
+      if (this === other) {
+        return true
+      }
+
+      if (javaClass != other?.javaClass) {
+        return false
+      }
+
+      other as RuleDefinition
+      if (name != other.name) {
+        return false
+      }
+
+      if (parameters != other.parameters) {
+        return false
+      }
+
+      return true
+    }
+
+    override fun hashCode(): Int {
+      var result = name.hashCode()
+      result = 31 * result + parameters.hashCode()
+      return result
+    }
+
+    override fun toString(): String {
+      return "RuleDefinition(name='$name', parameters=$parameters)"
+    }
+  }
 }
 
 class Attribute {

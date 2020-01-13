@@ -22,8 +22,6 @@ import com.netflix.spinnaker.swabbie.model.Identifiable
 import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.util.NoSuchElementException
-import kotlin.reflect.full.memberProperties
 
 interface ExclusionPolicy {
   val log: Logger
@@ -69,43 +67,13 @@ interface ExclusionPolicy {
 
     // match on property name
     kv.keys.forEach { key ->
-      findProperty(excludable, key, kv.getValue(key))?.let {
-        return patternMatchMessage(key, setOf(it))
+      val matchingValues: List<Any?> = kv.getValue(key)
+      if (excludable.matchResourceAttributes(key, matchingValues)) {
+        return patternMatchMessage(key, matchingValues.map { "$it" }.toSet())
       }
     }
 
     return null
-  }
-
-  fun findProperty(excludable: Excludable, key: String, values: List<Any>): String? {
-    try {
-      val fieldValue = getProperty(excludable, key) as? String
-      if (propertyMatches(values, fieldValue)) {
-        return fieldValue
-      }
-    } catch (e: IllegalArgumentException) {
-      log.warn("Object has no property name $key")
-    }
-
-    return null
-  }
-
-  fun <R : Any?> getProperty(instance: Any, propertyName: String): R {
-    try {
-      return readPropery(instance, propertyName)
-    } catch (e: NoSuchElementException) {
-      val details: Map<String, Any?>? = readPropery(instance, "details")
-      if (details != null) {
-        return details[propertyName] as R
-      }
-
-      throw e
-    }
-  }
-
-  private fun <R : Any?> readPropery(instance: Any, propertyName: String): R {
-    @Suppress("UNCHECKED_CAST")
-    return instance.javaClass.kotlin.memberProperties.first { it.name == propertyName }.get(instance) as R
   }
 
   /**

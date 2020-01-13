@@ -18,6 +18,8 @@
 
 package com.netflix.spinnaker.swabbie.aws.snapshots
 
+import com.netflix.spinnaker.config.ResourceTypeConfiguration.RuleDefinition
+import com.netflix.spinnaker.swabbie.model.Resource
 import com.netflix.spinnaker.swabbie.model.Result
 import com.netflix.spinnaker.swabbie.model.Rule
 import com.netflix.spinnaker.swabbie.model.Summary
@@ -28,9 +30,10 @@ import org.springframework.stereotype.Component
  *  the image is created. Once an image is deleted we can safely clean up the snapshot.
  */
 @Component
-class OrphanedSnapshotRule : Rule<AmazonSnapshot> {
-  override fun apply(resource: AmazonSnapshot): Result {
-    if (resource.matchesAnyRule(
+class OrphanedSnapshotRule : Rule {
+  override fun <T : Resource> applicableForType(clazz: Class<T>): Boolean = AmazonSnapshot::class.java.isAssignableFrom(clazz)
+  override fun <T : Resource> apply(resource: T, ruleDefinition: RuleDefinition?): Result {
+    if (resource !is AmazonSnapshot || resource.matchesAnyRule(
         IMAGE_EXISTS
       )) {
       return Result(null)

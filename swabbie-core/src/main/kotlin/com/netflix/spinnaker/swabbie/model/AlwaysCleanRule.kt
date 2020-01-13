@@ -18,6 +18,7 @@
 
 package com.netflix.spinnaker.swabbie.model
 
+import com.netflix.spinnaker.config.ResourceTypeConfiguration.RuleDefinition
 import com.netflix.spinnaker.config.SwabbieProperties
 import org.slf4j.LoggerFactory
 
@@ -26,7 +27,7 @@ import org.slf4j.LoggerFactory
  */
 class AlwaysCleanRule(
   swabbieProperties: SwabbieProperties
-) : Rule<Resource> {
+) : Rule {
   private val config = swabbieProperties.testing.alwaysCleanRuleConfig
   private val log = LoggerFactory.getLogger(javaClass)
 
@@ -34,7 +35,8 @@ class AlwaysCleanRule(
     log.info("Using ${javaClass.simpleName} for resources ${config.resourceIds}")
   }
 
-  override fun apply(resource: Resource): Result {
+  override fun <T : Resource> applicableForType(clazz: Class<T>): Boolean = true
+  override fun <T : Resource> apply(resource: T, ruleDefinition: RuleDefinition?): Result {
     return if (config.resourceIds.contains(resource.resourceId)) {
       Result(
         Summary(

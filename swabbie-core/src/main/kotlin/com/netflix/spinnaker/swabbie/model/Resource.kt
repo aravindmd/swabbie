@@ -30,6 +30,8 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.util.NoSuchElementException
+import kotlin.reflect.full.memberProperties
 
 /** Resource Types **/
 const val SECURITY_GROUP = "securityGroup"
@@ -94,18 +96,29 @@ abstract class Resource : Excludable, Timestamped, HasDetails() {
   fun getTagValue(key: String): Any? = tags()?.find { it.key == key }?.value
 
   fun expired(clock: Clock): Boolean {
-    return tags()?.any { expired(it, clock) } ?: false
+    tags()?.let { tags ->
+      if (tags.any { it.isTemporal() && it.value == "never" }) {
+        return false
+      }
+
+      return tags.any { expired(it, clock) }
+    }
+
+    return false
   }
 
-  fun expired(temporalTag: BasicTag, clock: Clock): Boolean {
+  fun age(clock: Clock): Duration {
+    return Duration.between(Instant.ofEpochMilli(createTs), Instant.now(clock))
+  }
+
+  private fun expired(temporalTag: BasicTag, clock: Clock): Boolean {
     if (temporalTag.value == "never" || !temporalTag.isTemporal()) {
       return false
     }
 
     val (amount, unit) = TemporalTags.toTemporalPair(temporalTag)
-    val ttl = Duration.of(amount, unit).toDays()
-    val resourceAge = Duration.between(Instant.ofEpochMilli(createTs), Instant.now(clock))
-    return resourceAge.toDays() > ttl
+    val ttlInDays = Duration.of(amount, unit).toDays()
+    return age(clock).toDays() > ttlInDays
   }
 }
 
@@ -160,6 +173,46 @@ interface Identifiable : Named {
   fun resourceUrl(workConfiguration: WorkConfiguration): String {
     return "${workConfiguration.notificationConfiguration.resourceUrl}/$resourceId"
   }
+
+  fun matchResourceAttributes(propertyName: String, values: List<Any?>): Boolean {
+    return try {
+      (getProperty(propertyName) as? Any).matchesAny(values)
+    } catch (e: Exception) {
+      false
+    }
+  }
+
+  private fun Any?.matchesAny(values: List<Any?>): Boolean {
+    if (this == null || this !is String) {
+      return values.contains(this)
+    }
+
+    val splitFieldValue = this.split(",").map { it.trim() }
+
+    return values.contains(this) ||
+      values.any { it is String && this.patternMatched(it) || splitFieldValue.contains(it) }
+  }
+
+  private fun <R : Any?> getProperty(propertyName: String): R {
+    try {
+      return readPropery(propertyName)
+    } catch (e: NoSuchElementException) {
+      val details: Map<String, Any?>? = readPropery("details")
+      if (details != null && propertyName in details) {
+        return details[propertyName] as R
+      }
+
+      throw e
+    }
+  }
+
+  private fun <R : Any?> readPropery(propertyName: String): R {
+    @Suppress("UNCHECKED_CAST")
+    return javaClass.kotlin.memberProperties.first { it.name == propertyName }.get(this) as R
+  }
+
+  fun String.patternMatched(p: String): Boolean =
+    p.startsWith("pattern:") && this.contains(p.split(":").last().toRegex())
 }
 
 data class Grouping(

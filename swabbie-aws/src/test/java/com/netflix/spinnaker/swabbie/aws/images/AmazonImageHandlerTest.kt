@@ -15,51 +15,35 @@
 */
 package com.netflix.spinnaker.swabbie.aws.images
 
-import com.natpryce.hamkrest.equalTo
-import com.natpryce.hamkrest.should.shouldMatch
 import com.netflix.spectator.api.NoopRegistry
-import com.netflix.spinnaker.config.Attribute
-import com.netflix.spinnaker.config.CloudProviderConfiguration
-import com.netflix.spinnaker.config.Exclusion
-import com.netflix.spinnaker.config.ExclusionType
-import com.netflix.spinnaker.config.ResourceTypeConfiguration
 import com.netflix.spinnaker.config.SwabbieProperties
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
-import com.netflix.spinnaker.swabbie.AccountProvider
-import com.netflix.spinnaker.swabbie.InMemoryCache
 import com.netflix.spinnaker.swabbie.InMemorySingletonCache
-import com.netflix.spinnaker.swabbie.aws.Parameters
 import com.netflix.spinnaker.swabbie.ResourceOwnerResolver
-import com.netflix.spinnaker.swabbie.WorkConfigurator
+import com.netflix.spinnaker.swabbie.aws.Parameters
 import com.netflix.spinnaker.swabbie.aws.AWS
 import com.netflix.spinnaker.swabbie.aws.caches.AmazonImagesUsedByInstancesCache
 import com.netflix.spinnaker.swabbie.aws.caches.AmazonLaunchConfigurationCache
-import com.netflix.spinnaker.swabbie.aws.launchconfigurations.AmazonLaunchConfiguration
+import com.netflix.spinnaker.swabbie.events.DeleteResourceEvent
 import com.netflix.spinnaker.swabbie.events.MarkResourceEvent
-import com.netflix.spinnaker.swabbie.exclusions.AccountExclusionPolicy
-import com.netflix.spinnaker.swabbie.exclusions.AllowListExclusionPolicy
-import com.netflix.spinnaker.swabbie.exclusions.LiteralExclusionPolicy
 import com.netflix.spinnaker.swabbie.model.AWS
-import com.netflix.spinnaker.swabbie.model.Application
 import com.netflix.spinnaker.swabbie.model.IMAGE
 import com.netflix.spinnaker.swabbie.model.MarkedResource
 import com.netflix.spinnaker.swabbie.model.NotificationInfo
-import com.netflix.spinnaker.swabbie.model.Region
-import com.netflix.spinnaker.swabbie.model.SpinnakerAccount
+import com.netflix.spinnaker.swabbie.model.Rule
 import com.netflix.spinnaker.swabbie.model.Summary
-import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.notifications.NotificationQueue
 import com.netflix.spinnaker.swabbie.orca.OrcaService
 import com.netflix.spinnaker.swabbie.orca.TaskResponse
-import com.netflix.spinnaker.swabbie.repository.LastSeenInfo
 import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
 import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.ResourceUseTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.TaskTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.UsedResourceRepository
+import com.netflix.spinnaker.swabbie.rules.ResourceRulesEngine
+import com.netflix.spinnaker.swabbie.test.WorkConfigurationTestHelper
 import com.netflix.spinnaker.swabbie.utils.ApplicationUtils
 import com.nhaarman.mockito_kotlin.any
-import com.nhaarman.mockito_kotlin.check
 import com.nhaarman.mockito_kotlin.doReturn
 import com.nhaarman.mockito_kotlin.doThrow
 import com.nhaarman.mockito_kotlin.eq
@@ -73,17 +57,19 @@ import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.validateMockitoUsage
+import org.mockito.Mockito.verifyNoMoreInteractions
 import org.springframework.context.ApplicationEventPublisher
+import strikt.api.expectThat
+import strikt.assertions.isEqualTo
+import strikt.assertions.isFalse
+import strikt.assertions.isNull
+import strikt.assertions.isTrue
 import java.time.Clock
-import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
-import java.util.Optional
 
 object AmazonImageHandlerTest {
-  private val front50ApplicationCache = mock<InMemoryCache<Application>>()
-  private val accountProvider = mock<AccountProvider>()
   private val resourceRepository = mock<ResourceTrackingRepository>()
   private val resourceStateRepository = mock<ResourceStateRepository>()
   private val usedSnapshotRepository = mock<UsedResourceRepository>()
@@ -103,18 +89,28 @@ object AmazonImageHandlerTest {
   private val applicationUtils = ApplicationUtils(emptyList())
   private val dynamicConfigService = mock<DynamicConfigService>()
   private val notificationQueue = mock<NotificationQueue>()
+  private val rulesEngine = mock<ResourceRulesEngine>()
+  private val ruleAndViolationPair = Pair<Rule, List<Summary>>(mock(), listOf(Summary("violate rule", ruleName = "rule")))
+  private val workConfiguration = WorkConfigurationTestHelper
+    .generateWorkConfiguration(resourceType = IMAGE, cloudProvider = AWS)
+
+  private val params = Parameters(
+    account = workConfiguration.account.accountId!!,
+    region = workConfiguration.location,
+    environment = workConfiguration.account.environment
+  )
+
+  private val usedByInstancesCache = AmazonImagesUsedByInstancesCache(emptyMap(), clock.millis(), "instanceCache")
+  private val usedByLaunchConfigCache = AmazonLaunchConfigurationCache(emptyMap(), clock.millis(), "launchConfigCache")
 
   private val subject = AmazonImageHandler(
     clock = clock,
     registry = NoopRegistry(),
     notifier = mock(),
-    rules = listOf(OrphanedImageRule()),
+    rulesEngine = rulesEngine,
     resourceTrackingRepository = resourceRepository,
     resourceStateRepository = resourceStateRepository,
-    exclusionPolicies = listOf(
-      LiteralExclusionPolicy(),
-      AllowListExclusionPolicy(front50ApplicationCache, accountProvider)
-    ),
+    exclusionPolicies = listOf(),
     resourceOwnerResolver = resourceOwnerResolver,
     applicationEventPublisher = applicationEventPublisher,
     aws = aws,
@@ -130,102 +126,45 @@ object AmazonImageHandlerTest {
     notificationQueue = notificationQueue
   )
 
+  private const val user = "test@netflix.com"
+  private val ami123 = AmazonImage(
+    imageId = "ami-123",
+    resourceId = "ami-123",
+    description = "ancestor_id=ami-122",
+    ownerId = null,
+    state = "available",
+    resourceType = IMAGE,
+    cloudProvider = AWS,
+    name = "123-xenial-hvm-sriov-ebs",
+    creationDate = LocalDateTime.now(clock).minusDays(3).toString(),
+    blockDeviceMappings = emptyList()
+  )
+
+  private val ami132 = AmazonImage(
+    imageId = "ami-132",
+    resourceId = "ami-132",
+    description = "description 132",
+    ownerId = null,
+    state = "available",
+    resourceType = IMAGE,
+    cloudProvider = AWS,
+    name = "132-xenial-hvm-sriov-ebs",
+    creationDate = LocalDateTime.now(clock).minusDays(3).toString(),
+    blockDeviceMappings = emptyList()
+  )
+
   @BeforeEach
   fun setup() {
-    whenever(resourceOwnerResolver.resolve(any())) doReturn "lucious-mayweather@netflix.com"
-    whenever(front50ApplicationCache.get()) doReturn
-      setOf(
-        Application(name = "testapp", email = "name@netflix.com"),
-        Application(name = "important", email = "test@netflix.com"),
-        Application(name = "random", email = "random@netflix.com")
-      )
+    ami123.details.clear()
+    ami132.details.clear()
 
-    whenever(accountProvider.getAccounts()) doReturn
-      setOf(
-        SpinnakerAccount(
-          name = "test",
-          accountId = "1234",
-          type = "aws",
-          edda = "http://edda",
-          regions = listOf(Region(name = "us-east-1")),
-          eddaEnabled = false,
-          environment = "test"
-        ),
-        SpinnakerAccount(
-          name = "prod",
-          accountId = "4321",
-          type = "aws",
-          edda = "http://edda",
-          regions = listOf(Region(name = "us-east-1")),
-          eddaEnabled = false,
-          environment = "prod"
-        )
-      )
+    whenever(resourceOwnerResolver.resolve(any())) doReturn user
+    whenever(aws.getImages(params)) doReturn listOf(ami123, ami132)
+    whenever(imagesUsedByinstancesCache.get()) doReturn usedByInstancesCache
+    whenever(launchConfigurationCache.get()) doReturn usedByLaunchConfigCache
 
-    val params = Parameters(account = "1234", region = "us-east-1", environment = "test")
-    whenever(aws.getImages(params)) doReturn listOf(
-      AmazonImage(
-        imageId = "ami-123",
-        resourceId = "ami-123",
-        description = "ancestor_id=ami-122",
-        ownerId = null,
-        state = "available",
-        resourceType = IMAGE,
-        cloudProvider = AWS,
-        name = "123-xenial-hvm-sriov-ebs",
-        creationDate = LocalDateTime.now().minusDays(3).toString(),
-        blockDeviceMappings = emptyList()
-      ),
-      AmazonImage(
-        imageId = "ami-132",
-        resourceId = "ami-132",
-        description = "description 132",
-        ownerId = null,
-        state = "available",
-        resourceType = IMAGE,
-        cloudProvider = AWS,
-        name = "132-xenial-hvm-sriov-ebs",
-        creationDate = LocalDateTime.now().minusDays(3).toString(),
-        blockDeviceMappings = emptyList()
-      )
-    )
-
-    whenever(resourceUseTrackingRepository.getUnused()) doReturn
-      listOf(
-        LastSeenInfo(
-          "ami-123",
-          "sg-123-v001",
-          clock.instant().minus(Duration.ofDays(32)).toEpochMilli()
-        ),
-        LastSeenInfo(
-          "ami-132",
-          "sg-132-v001",
-          clock.instant().minus(Duration.ofDays(32)).toEpochMilli()
-        )
-      )
-
-    val defaultLaunchConfig = AmazonLaunchConfiguration(
-      name = "test-app-v001-111920",
-      launchConfigurationName = "test-app-v001-111920",
-      imageId = "ami-132",
-      createdTime = clock.instant().minus(Duration.ofDays(3)).toEpochMilli()
-    )
-
-    whenever(imagesUsedByinstancesCache.get()) doReturn
-      AmazonImagesUsedByInstancesCache(
-        mapOf(
-          "us-east-1" to setOf("ami-132", "ami-444")
-        ),
-        clock.instant().toEpochMilli(),
-        "default"
-      )
-    whenever(launchConfigurationCache.get()) doReturn
-      AmazonLaunchConfigurationCache(
-        mapOf(
-          "us-east-1" to mapOf("ami-132" to setOf(defaultLaunchConfig))
-        ),
-        clock.instant().toEpochMilli(), "default"
-      )
+    whenever(dynamicConfigService.getConfig(any(), any(), eq(workConfiguration.maxItemsProcessedPerCycle))) doReturn
+      workConfiguration.maxItemsProcessedPerCycle
   }
 
   @AfterEach
@@ -234,265 +173,108 @@ object AmazonImageHandlerTest {
     reset(
       resourceRepository,
       aws,
-      accountProvider,
       applicationEventPublisher,
       resourceOwnerResolver,
       taskTrackingRepository,
       imagesUsedByinstancesCache,
-      launchConfigurationCache
+      launchConfigurationCache,
+      rulesEngine
     )
   }
 
   @Test
-  fun `should handle work for images`() {
-    Assertions.assertTrue(subject.handles(getWorkConfiguration()))
+  fun `should handle images`() {
+    whenever(rulesEngine.getRules(workConfiguration)) doReturn listOf(ruleAndViolationPair.first)
+    expectThat(subject.handles(workConfiguration)).isTrue()
+
+    whenever(rulesEngine.getRules(workConfiguration)) doReturn emptyList<Rule>()
+    expectThat(subject.handles(workConfiguration)).isFalse()
   }
 
   @Test
-  fun `should find image cleanup candidates`() {
-    subject.getCandidates(getWorkConfiguration()).let { images ->
-      // we get the entire collection of images
-      images!!.size shouldMatch equalTo(2)
-    }
+  fun `should get images`() {
+    expectThat(subject.getCandidates(workConfiguration)!!.count()).isEqualTo(2)
   }
 
   @Test
   fun `should fail to get candidates if checking launch configuration references fails`() {
-    val configuration = getWorkConfiguration()
     whenever(launchConfigurationCache.get()) doThrow
       IllegalStateException("launch configs")
 
     Assertions.assertThrows(IllegalStateException::class.java) {
-      subject.preProcessCandidates(subject.getCandidates(getWorkConfiguration()).orEmpty(), configuration)
+      subject.preProcessCandidates(subject.getCandidates(workConfiguration).orEmpty(), workConfiguration)
     }
   }
 
   @Test
   fun `should fail to get candidates if checking instance references fails`() {
-    val configuration = getWorkConfiguration()
     whenever(imagesUsedByinstancesCache.get()) doThrow
       IllegalStateException("failed to get instances")
 
     Assertions.assertThrows(IllegalStateException::class.java) {
-      subject.preProcessCandidates(subject.getCandidates(getWorkConfiguration()).orEmpty(), configuration)
+      subject.preProcessCandidates(subject.getCandidates(workConfiguration).orEmpty(), workConfiguration)
     }
   }
 
   @Test
-  fun `should find cleanup candidates, apply exclusion policies on them and mark them`() {
-    val workConfiguration = getWorkConfiguration(
-      maxAgeDays = 1,
-      exclusionList = mutableListOf(
-        Exclusion()
-          .withType(ExclusionType.Allowlist.toString())
-          .withAttributes(
-            setOf(
-              Attribute()
-                .withKey("imageId")
-                .withValue(
-                  listOf("ami-123") // will exclude anything else not matching this imageId
-                )
-            )
-          )
-      )
-    )
-
-    subject.getCandidates(workConfiguration).let { images ->
-      // we get the entire collection of images
-      images!!.size shouldMatch equalTo(2)
-    }
-
-    whenever(dynamicConfigService.getConfig(any(), any(), eq(workConfiguration.maxItemsProcessedPerCycle))) doReturn
-      workConfiguration.maxItemsProcessedPerCycle
+  fun `should mark images`() {
+    whenever(rulesEngine.evaluate(any<AmazonImage>(), any())) doReturn ruleAndViolationPair.second
 
     subject.mark(workConfiguration)
 
-    // ami-132 is excluded by exclusion policies, specifically because ami-123 is not allowlisted
-    verify(applicationEventPublisher, times(1)).publishEvent(
-      check<MarkResourceEvent> { event ->
-        Assertions.assertTrue(event.markedResource.resourceId == "ami-123")
-        Assertions.assertEquals(event.markedResource.projectedDeletionStamp.inDays(), 4)
-      }
-    )
-
-    verify(resourceRepository, times(1)).upsert(any(), any())
+    verify(resourceRepository, times(2)).upsert(any(), any())
+    verify(applicationEventPublisher, times(2)).publishEvent(any<MarkResourceEvent>())
+    verifyNoMoreInteractions(applicationEventPublisher)
   }
 
   @Test
-  fun `should not mark images referenced by other resources`() {
+  fun `should set used by instances`() {
+    whenever(rulesEngine.evaluate(eq(ami123), any())) doReturn ruleAndViolationPair.second
     whenever(imagesUsedByinstancesCache.get()) doReturn
       AmazonImagesUsedByInstancesCache(
         mapOf(
-          "us-east-1" to setOf("ami-123", "ami-444")
+          "us-east-1" to setOf(ami123.imageId, "ami-444")
         ),
-        clock.instant().toEpochMilli(),
+        clock.millis(),
         "default"
       )
 
-    val workConfiguration = getWorkConfiguration(
-      exclusionList = mutableListOf(
-        Exclusion()
-          .withType(ExclusionType.Allowlist.toString())
-          .withAttributes(
-            setOf(
-              Attribute()
-                .withKey("imageId")
-                .withValue(
-                  listOf("ami-123") // will exclude anything else not matching this imageId
-                )
-            )
-          )
-      )
-    )
+    expectThat(ami123.details[USED_BY_INSTANCES]).isNull()
+    subject.preProcessCandidates(listOf(ami123, ami132), workConfiguration)
 
-    whenever(dynamicConfigService.getConfig(any(), any(), eq(workConfiguration.maxItemsProcessedPerCycle))) doReturn
-      workConfiguration.maxItemsProcessedPerCycle
-
-    subject.getCandidates(workConfiguration).let { images ->
-      images!!.size shouldMatch equalTo(2)
-      Assertions.assertTrue(images.any { it.imageId == "ami-123" })
-      Assertions.assertTrue(images.any { it.imageId == "ami-132" })
-    }
-
-    subject.mark(workConfiguration)
-
-    // ami-132 is excluded by exclusion policies, specifically because ami-132 is not allowlisted
-    // ami-123 is referenced by an instance, so therefore should not be marked for deletion
-    verify(applicationEventPublisher, times(0)).publishEvent(any<MarkResourceEvent>())
-    verify(resourceRepository, times(0)).upsert(any(), any())
-  }
-
-  @Test
-  fun `should not mark ancestor or base images`() {
-    val workConfiguration = getWorkConfiguration()
-    val params = Parameters(account = "1234", region = "us-east-1", environment = "test")
-    whenever(aws.getImages(params)) doReturn listOf(
-      AmazonImage(
-        imageId = "ami-123",
-        resourceId = "ami-123",
-        description = "ancestor_id=ami-132",
-        ownerId = null,
-        state = "available",
-        resourceType = IMAGE,
-        cloudProvider = AWS,
-        name = "123-xenial-hvm-sriov-ebs",
-        creationDate = LocalDateTime.now().minusDays(3).toString(),
-        blockDeviceMappings = emptyList()
-      ),
-      AmazonImage(
-        imageId = "ami-132",
-        resourceId = "ami-132",
-        description = "description 132",
-        ownerId = null,
-        state = "available",
-        resourceType = IMAGE,
-        cloudProvider = AWS,
-        name = "132-xenial-hvm-sriov-ebs",
-        creationDate = LocalDateTime.now().minusDays(3).toString(),
-        blockDeviceMappings = emptyList()
-      )
-    )
-
-    subject.getCandidates(workConfiguration).let { images ->
-      images!!.size shouldMatch equalTo(2)
-      Assertions.assertTrue(images.any { it.imageId == "ami-123" })
-      Assertions.assertTrue(images.any { it.imageId == "ami-132" })
-    }
-
-    subject.mark(workConfiguration)
-
-    // ami-132 is an ancestor/base for ami-123 so skip that
-    verify(applicationEventPublisher, times(1)).publishEvent(
-      check<MarkResourceEvent> { event ->
-        Assertions.assertTrue(event.markedResource.resourceId == "ami-123")
-      }
-    )
+    expectThat(ami123.details[USED_BY_INSTANCES]).isEqualTo(true)
+    expectThat(ami132.details[USED_BY_INSTANCES]).isNull()
   }
 
   @Test
   fun `should delete images`() {
-    val fifteenDaysAgo = clock.instant().toEpochMilli() - 15 * 24 * 60 * 60 * 1000L
-    val workConfiguration = getWorkConfiguration(maxAgeDays = 2)
-    val image = AmazonImage(
-      imageId = "ami-123",
-      resourceId = "ami-123",
-      description = "ancestor_id=ami-122",
-      ownerId = null,
-      state = "available",
-      resourceType = IMAGE,
-      cloudProvider = AWS,
-      name = "123-xenial-hvm-sriov-ebs",
-      creationDate = LocalDateTime.now().minusDays(3).toString(),
-      blockDeviceMappings = emptyList()
-    )
-
-    whenever(resourceRepository.getMarkedResourcesToDelete()) doReturn
-      listOf(
-        MarkedResource(
-          resource = image,
-          summaries = listOf(Summary("Image is unused", "testRule 1")),
-          namespace = workConfiguration.namespace,
-          resourceOwner = "test@netflix.com",
-          projectedDeletionStamp = fifteenDaysAgo,
-          notificationInfo = NotificationInfo(
-            recipient = "test@netflix.com",
-            notificationType = "email",
-            notificationStamp = fifteenDaysAgo
-          )
+    val markedResources = listOf(
+      MarkedResource(
+        resource = ami123,
+        summaries = ruleAndViolationPair.second,
+        namespace = workConfiguration.namespace,
+        resourceOwner = user,
+        projectedDeletionStamp = clock.millis(),
+        notificationInfo = NotificationInfo(
+          recipient = user,
+          notificationType = "email",
+          notificationStamp = clock.millis()
         )
-      )
+      ))
 
-    whenever(dynamicConfigService.getConfig(any(), any(), eq(workConfiguration.maxItemsProcessedPerCycle))) doReturn
-      workConfiguration.maxItemsProcessedPerCycle
+    whenever(rulesEngine.evaluate(any<AmazonImage>(), any())) doReturn ruleAndViolationPair.second
+    whenever(resourceRepository.getMarkedResourcesToDelete()) doReturn markedResources
 
-    val params = Parameters(account = "1234", region = "us-east-1", environment = "test", id = "ami-123")
-
-    whenever(aws.getImages(params)) doReturn listOf(image)
+    whenever(aws.getImages(params.copy(id = ami123.imageId))) doReturn listOf(ami123)
     whenever(orcaService.orchestrate(any())) doReturn TaskResponse(ref = "/tasks/1234")
 
     subject.delete(workConfiguration)
 
-    verify(taskTrackingRepository, times(1)).add(any(), any())
-    verify(orcaService, times(1)).orchestrate(any())
-  }
+    verify(orcaService).orchestrate(any())
+    verify(taskTrackingRepository).add(any(), any())
+    verify(applicationEventPublisher).publishEvent(any<DeleteResourceEvent>())
 
-  private fun Long.inDays(): Int = Duration.between(Instant.ofEpochMilli(clock.millis()), Instant.ofEpochMilli(this)).toDays().toInt()
-
-  private fun getWorkConfiguration(
-    isEnabled: Boolean = true,
-    dryRunMode: Boolean = false,
-    accountIds: List<String> = listOf("test"),
-    regions: List<String> = listOf("us-east-1"),
-    exclusionList: MutableList<Exclusion> = mutableListOf(),
-    maxAgeDays: Int = 1
-  ): WorkConfiguration {
-    val swabbieProperties = SwabbieProperties().apply {
-      dryRun = dryRunMode
-      providers = listOf(
-        CloudProviderConfiguration().apply {
-          name = "aws"
-          exclusions = mutableSetOf()
-          accounts = accountIds
-          locations = regions
-          resourceTypes = listOf(
-            ResourceTypeConfiguration().apply {
-              name = "image"
-              enabled = isEnabled
-              dryRun = dryRunMode
-              exclusions = exclusionList.toMutableSet()
-              retention = 2
-              maxAge = maxAgeDays
-            }
-          )
-        }
-      )
-    }
-
-    return WorkConfigurator(
-      swabbieProperties = swabbieProperties,
-      accountProvider = accountProvider,
-      exclusionPolicies = listOf(AccountExclusionPolicy()),
-      exclusionsSuppliers = Optional.empty()
-    ).generateWorkConfigurations()[0]
+    verifyNoMoreInteractions(applicationEventPublisher)
+    verifyNoMoreInteractions(orcaService)
   }
 }
