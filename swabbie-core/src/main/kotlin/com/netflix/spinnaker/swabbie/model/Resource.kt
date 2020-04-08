@@ -193,7 +193,7 @@ interface Identifiable : Named {
       values.any { it is String && this.patternMatched(it) || splitFieldValue.contains(it) }
   }
 
-  private fun <R : Any?> getProperty(propertyName: String): R {
+  fun <R : Any?> getProperty(propertyName: String): R {
     try {
       return readPropery(propertyName)
     } catch (e: NoSuchElementException) {
@@ -310,6 +310,28 @@ data class MarkedResource(
     return apply {
       projectedDeletionStamp += timestampToAdd
     }
+  }
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) {
+      return true
+    }
+
+    if (javaClass != other?.javaClass) {
+      return false
+    }
+
+    other as MarkedResource
+
+    if (resource != other.resource) {
+      return false
+    }
+
+    return true
+  }
+
+  override fun hashCode(): Int {
+    return resource.hashCode()
   }
 }
 
