@@ -27,13 +27,13 @@ import com.netflix.spinnaker.swabbie.model.SwabbieNamespace
 import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.notifications.NotificationSender
 import com.netflix.spinnaker.swabbie.test.TestResource
+import java.time.Clock
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestMethod
 import org.springframework.web.bind.annotation.RestController
-import java.time.Clock
 
 /**
  * This controller is for testing resources by on demand marking and deleting them.
@@ -104,11 +104,13 @@ class TestingController(
     @RequestBody resource: OnDemandMarkData
   ) {
     val workConfiguration = findWorkConfiguration(SwabbieNamespace.namespaceParser(namespace))
-    val markedResource = createMarkedResource(workConfiguration,
+    val markedResource = createMarkedResource(
+      workConfiguration,
       resource.resourceId!!,
       resource.resourceOwner,
       resource.projectedDeletionStamp,
-      resource.markTs)
+      resource.markTs
+    )
     val notificationResourceData = NotificationSender.NotificationResourceData(
       resourceType = workConfiguration.resourceType,
       resourceUrl = markedResource.resource.resourceUrl(workConfiguration),
@@ -122,7 +124,8 @@ class TestingController(
       markedResource.resourceOwner,
       markedResource.resourceType,
       listOf(notificationResourceData),
-      workConfiguration.notificationConfiguration)
+      workConfiguration.notificationConfiguration
+    )
   }
 
   private fun findWorkConfiguration(namespace: SwabbieNamespace): WorkConfiguration {
@@ -143,7 +146,8 @@ class TestingController(
     markTs: Long?
   ): MarkedResource {
     return MarkedResource(
-      resource = TestResource(resourceId = id,
+      resource = TestResource(
+        resourceId = id,
         name = id,
         resourceType = workConfiguration.resourceType,
         cloudProvider = workConfiguration.cloudProvider

@@ -18,13 +18,13 @@ package com.netflix.spinnaker.config
 
 import com.netflix.spinnaker.swabbie.events.Action
 import com.netflix.spinnaker.swabbie.model.EmptyNotificationConfiguration
-import org.springframework.boot.context.properties.ConfigurationProperties
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import org.springframework.boot.context.properties.ConfigurationProperties
 
 /**
  * @param {@link #minImagesUsedByLC} minimum number of images used by launch configurations that should be
@@ -139,14 +139,14 @@ class ResourceTypeConfiguration {
    * Allows to specify enabled rules. When defined, all other rules are ignored at runtime.
    * See [com.netflix.spinnaker.swabbie.rules.RulesEngine.evaluate]
    *------------- config snippet for a resource type---------------
-          enabledRules:
-          - operator: AND
-            description: Images with packer tags that are expired
-            rules:
-            - name: ExpiredResourceRule
-            - name: AttributeRule
-              parameters:
-                description: pattern:^packer-build
+   enabledRules:
+   - operator: AND
+   description: Images with packer tags that are expired
+   rules:
+   - name: ExpiredResourceRule
+   - name: AttributeRule
+   parameters:
+   description: pattern:^packer-build
    *----------------
    * @property operator ([RuleConfiguration.OPERATOR.OR], [RuleConfiguration.OPERATOR.AND]) dictate how rules are applied
    * @property rules a list of named rules [com.netflix.spinnaker.swabbie.model.Rule]

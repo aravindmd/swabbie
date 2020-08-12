@@ -19,10 +19,10 @@
 package com.netflix.spinnaker.swabbie.aws.snapshots
 
 import com.fasterxml.jackson.annotation.JsonTypeName
+import com.netflix.spinnaker.swabbie.Dates
 import com.netflix.spinnaker.swabbie.aws.model.AmazonResource
 import com.netflix.spinnaker.swabbie.model.AWS
 import com.netflix.spinnaker.swabbie.model.SNAPSHOT
-import com.netflix.spinnaker.swabbie.Dates
 import java.time.Instant
 import java.time.ZoneId
 
@@ -54,10 +54,11 @@ class AmazonSnapshot(
   companion object {
     private fun convertStartTime(value: Any): Long {
       return when (value) {
-        is String -> Dates
-          .toLocalDateTime(value)
-          .toInstant(ZoneId.systemDefault().rules.getOffset(Instant.now()))
-          .toEpochMilli()
+        is String ->
+          Dates
+            .toLocalDateTime(value)
+            .toInstant(ZoneId.systemDefault().rules.getOffset(Instant.now()))
+            .toEpochMilli()
         is Long -> value
         else -> throw IllegalArgumentException("Start time must be String (date) or Long, but given ${value.javaClass}")
       }

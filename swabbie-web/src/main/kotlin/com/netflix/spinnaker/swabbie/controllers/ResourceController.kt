@@ -22,8 +22,8 @@ import com.netflix.spinnaker.swabbie.model.MarkedResource
 import com.netflix.spinnaker.swabbie.model.MarkedResourceInterface
 import com.netflix.spinnaker.swabbie.model.ResourceEvaluation
 import com.netflix.spinnaker.swabbie.model.ResourceState
-import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.model.SwabbieNamespace
+import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.notifications.NotificationSender
 import com.netflix.spinnaker.swabbie.repository.DeleteInfo
 import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
@@ -68,9 +68,10 @@ class ResourceController(
 
     return when {
       expand -> markedResources
-      list -> markedResources
-                .map { DeleteInfo(name = it.name.orEmpty(), namespace = it.namespace, resourceId = it.resourceId) }
-                .sortedBy { it.name }
+      list ->
+        markedResources
+          .map { DeleteInfo(name = it.name.orEmpty(), namespace = it.namespace, resourceId = it.resourceId) }
+          .sortedBy { it.name }
       else -> markedResources.map { it.slim() }
     }
   }

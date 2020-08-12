@@ -19,6 +19,12 @@ package com.netflix.spinnaker.swabbie.web.config
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.filters.AuthenticatedRequestFilter
 import com.netflix.spinnaker.kork.web.interceptors.MetricsInterceptor
+import javax.servlet.Filter
+import javax.servlet.FilterChain
+import javax.servlet.FilterConfig
+import javax.servlet.ServletRequest
+import javax.servlet.ServletResponse
+import javax.servlet.http.HttpServletResponse
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
@@ -27,26 +33,24 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.core.Ordered
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurerAdapter
-import javax.servlet.Filter
-import javax.servlet.FilterChain
-import javax.servlet.FilterConfig
-import javax.servlet.ServletRequest
-import javax.servlet.ServletResponse
-import javax.servlet.http.HttpServletResponse
 
 @Configuration
-@ComponentScan(basePackages = arrayOf(
-  "com.netflix.spinnaker.swabbie.controllers"
-))
+@ComponentScan(
+  basePackages = arrayOf(
+    "com.netflix.spinnaker.swabbie.controllers"
+  )
+)
 open class WebConfiguration
 @Autowired constructor(
   private val registry: Registry
 ) : WebMvcConfigurerAdapter() {
 
   override fun addInterceptors(registry: InterceptorRegistry) {
-    registry.addInterceptor(MetricsInterceptor(
-      this.registry, "controller.invocations", listOf("application"), listOf("BasicErrorController")
-    ))
+    registry.addInterceptor(
+      MetricsInterceptor(
+        this.registry, "controller.invocations", listOf("application"), listOf("BasicErrorController")
+      )
+    )
   }
 
   @Bean

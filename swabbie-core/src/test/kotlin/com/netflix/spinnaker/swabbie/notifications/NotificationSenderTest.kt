@@ -16,33 +16,32 @@
 
 package com.netflix.spinnaker.swabbie.notifications
 
-import com.netflix.appinfo.InstanceInfo
-import com.netflix.discovery.StatusChangeEvent
 import com.netflix.spectator.api.NoopRegistry
+import com.netflix.spinnaker.kork.discovery.DiscoveryStatusListener
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
-import com.netflix.spinnaker.kork.eureka.RemoteStatusChangedEvent
 import com.netflix.spinnaker.swabbie.LockingService
 import com.netflix.spinnaker.swabbie.events.Action
 import com.netflix.spinnaker.swabbie.events.OwnerNotifiedEvent
 import com.netflix.spinnaker.swabbie.model.MarkedResource
-import com.netflix.spinnaker.swabbie.model.Summary
-import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.model.ResourceState
 import com.netflix.spinnaker.swabbie.model.Status
-import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
+import com.netflix.spinnaker.swabbie.model.Summary
+import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
+import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
 import com.netflix.spinnaker.swabbie.test.InMemoryNotificationQueue
 import com.netflix.spinnaker.swabbie.test.TestResource
 import com.netflix.spinnaker.swabbie.test.WorkConfigurationTestHelper
-import com.nhaarman.mockito_kotlin.mock
-import com.nhaarman.mockito_kotlin.reset
-import com.nhaarman.mockito_kotlin.whenever
-import com.nhaarman.mockito_kotlin.verify
-import com.nhaarman.mockito_kotlin.doReturn
 import com.nhaarman.mockito_kotlin.any
+import com.nhaarman.mockito_kotlin.doReturn
+import com.nhaarman.mockito_kotlin.mock
 import com.nhaarman.mockito_kotlin.never
+import com.nhaarman.mockito_kotlin.reset
 import com.nhaarman.mockito_kotlin.times
-
+import com.nhaarman.mockito_kotlin.verify
+import com.nhaarman.mockito_kotlin.whenever
+import java.time.Clock
+import java.time.Instant
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -51,8 +50,6 @@ import strikt.api.expectThat
 import strikt.assertions.isNotEqualTo
 import strikt.assertions.isNotNull
 import strikt.assertions.isNull
-import java.time.Clock
-import java.time.Instant
 
 object NotificationSenderTest {
   private val notifier = mock<Notifier>()
@@ -62,6 +59,7 @@ object NotificationSenderTest {
   private val resourceStateRepository = mock<ResourceStateRepository>()
   private val applicationEventPublisher = mock<ApplicationEventPublisher>()
   private val dynamicConfigService = mock<DynamicConfigService>()
+  private val discoveryStatusListener = mock<DiscoveryStatusListener>()
 
   private val workConfiguration1 = WorkConfigurationTestHelper
     .generateWorkConfiguration(namespace = "ns1", resourceType = "type1")
@@ -81,7 +79,8 @@ object NotificationSenderTest {
     notificationQueue = notificationQueue,
     registry = NoopRegistry(),
     workConfigurations = listOf(workConfiguration1, workConfiguration2, workConfiguration3),
-    dynamicConfigService = dynamicConfigService
+    dynamicConfigService = dynamicConfigService,
+    discoveryStatusListener = discoveryStatusListener
   )
 
   private val now = clock.millis()
@@ -89,9 +88,7 @@ object NotificationSenderTest {
   @BeforeEach
   fun setup() {
     whenever(dynamicConfigService.getConfig(any<Class<*>>(), any(), any())) doReturn 2
-    notificationService
-      .onApplicationEvent(
-        RemoteStatusChangedEvent(StatusChangeEvent(InstanceInfo.InstanceStatus.DOWN, InstanceInfo.InstanceStatus.UP)))
+    whenever(discoveryStatusListener.isEnabled) doReturn true
   }
 
   @AfterEach
@@ -130,7 +127,8 @@ object NotificationSenderTest {
       NotificationTask(
         resourceType = notResourceType,
         namespace = workConfiguration1.namespace
-      ))
+      )
+    )
 
     whenever(
       resourceRepository.getMarkedResources()
@@ -153,7 +151,8 @@ object NotificationSenderTest {
       NotificationTask(
         resourceType = workConfiguration1.resourceType,
         namespace = workConfiguration1.namespace
-      ))
+      )
+    )
 
     whenever(
       resourceRepository.getMarkedResources()
@@ -188,13 +187,15 @@ object NotificationSenderTest {
       NotificationTask(
         resourceType = workConfiguration1.resourceType,
         namespace = workConfiguration1.namespace
-      ))
+      )
+    )
 
     notificationQueue.add(
       NotificationTask(
         resourceType = workConfiguration2.resourceType,
         namespace = workConfiguration2.namespace
-      ))
+      )
+    )
 
     notificationQueue.add(
       NotificationTask(
@@ -234,7 +235,8 @@ object NotificationSenderTest {
       NotificationTask(
         resourceType = workConfiguration1.resourceType,
         namespace = workConfiguration1.namespace
-      ))
+      )
+    )
 
     whenever(resourceStateRepository.getAll()) doReturn
       listOf(
@@ -277,7 +279,8 @@ object NotificationSenderTest {
       NotificationTask(
         resourceType = workConfiguration1.resourceType,
         namespace = workConfiguration1.namespace
-      ))
+      )
+    )
 
     whenever(
       resourceRepository.getMarkedResources()

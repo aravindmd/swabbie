@@ -51,13 +51,13 @@ import com.netflix.spinnaker.swabbie.repository.TaskTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.UsedResourceRepository
 import com.netflix.spinnaker.swabbie.rules.RulesEngine
 import com.netflix.spinnaker.swabbie.utils.ApplicationUtils
+import java.time.Clock
+import java.time.Duration
+import kotlin.system.measureTimeMillis
 import net.logstash.logback.argument.StructuredArguments.kv
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
-import java.time.Clock
-import java.time.Duration
-import kotlin.system.measureTimeMillis
 
 @Component
 class AmazonImageHandler(
@@ -211,14 +211,17 @@ class AmazonImageHandler(
     params: Parameters
   ) {
     if (launchConfigurationCache.get().getLastUpdated()
-        < clock.instant().toEpochMilli().minus(Duration.ofHours(1).toMillis())) {
+      < clock.instant().toEpochMilli().minus(Duration.ofHours(1).toMillis())
+    ) {
       throw StaleCacheException("Amazon launch configuration cache over 1 hour old, aborting.")
     }
     val imagesUsedByLaunchConfigsForRegion = launchConfigurationCache.get().getRefdAmisForRegion(params.region).keys
     log.info("Checking the {} images used by launch configurations.", imagesUsedByLaunchConfigsForRegion.size)
     if (imagesUsedByLaunchConfigsForRegion.size < swabbieProperties.minImagesUsedByLC) {
-      throw CacheSizeException("Amazon launch configuration cache contains less than " +
-        "${swabbieProperties.minImagesUsedByLC} images used, aborting for safety.")
+      throw CacheSizeException(
+        "Amazon launch configuration cache contains less than " +
+          "${swabbieProperties.minImagesUsedByLC} images used, aborting for safety."
+      )
     }
 
     images
@@ -248,14 +251,17 @@ class AmazonImageHandler(
     params: Parameters
   ) {
     if (imagesUsedByinstancesCache.get().getLastUpdated()
-        < clock.instant().toEpochMilli().minus(Duration.ofHours(1).toMillis())) {
+      < clock.instant().toEpochMilli().minus(Duration.ofHours(1).toMillis())
+    ) {
       throw StaleCacheException("Amazon images used by instances cache over 1 hour old, aborting.")
     }
     val imagesUsedByInstancesInRegion = imagesUsedByinstancesCache.get().getAll(params)
     log.info("Checking {} images used by instances", imagesUsedByInstancesInRegion.size)
     if (imagesUsedByInstancesInRegion.size < swabbieProperties.minImagesUsedByInst) {
-      throw CacheSizeException("Amazon images used by instances cache contains less than " +
-        "${swabbieProperties.minImagesUsedByInst} images, aborting for safety.")
+      throw CacheSizeException(
+        "Amazon images used by instances cache contains less than " +
+          "${swabbieProperties.minImagesUsedByInst} images, aborting for safety."
+      )
     }
 
     images
@@ -287,7 +293,7 @@ class AmazonImageHandler(
       .getUnused()
       .map {
         it.resourceId to it.usedByResourceId
-        }.toMap()
+      }.toMap()
 
     images.filter {
       NAIVE_EXCLUSION !in it.details &&
@@ -329,7 +335,7 @@ class AmazonImageHandler(
           OrcaJob(
             type = "upsertImageTags",
             context = mutableMapOf(
-              "imageNames" to setOf(markedResource.resourceId),
+              "imageNames" to setOf(markedResource.name),
               "regions" to setOf(workConfiguration.location),
               "tags" to mapOf("expiration_time" to "never"),
               "cloudProvider" to workConfiguration.cloudProvider,

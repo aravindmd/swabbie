@@ -20,20 +20,21 @@ import com.netflix.spectator.api.Registry
 import com.netflix.spectator.api.patterns.PolledMeter
 import com.netflix.spinnaker.config.Schedule
 import com.netflix.spinnaker.config.SwabbieProperties
+import com.netflix.spinnaker.kork.discovery.DiscoveryStatusListener
+import com.netflix.spinnaker.kork.discovery.RemoteStatusChangedEvent
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
-import com.netflix.spinnaker.kork.eureka.RemoteStatusChangedEvent
 import com.netflix.spinnaker.swabbie.CacheStatus
-import com.netflix.spinnaker.swabbie.discovery.DiscoveryActivated
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
-import org.springframework.scheduling.annotation.Scheduled
-import org.springframework.stereotype.Component
 import java.lang.IllegalStateException
 import java.time.Clock
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.Duration
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import org.springframework.context.ApplicationListener
+import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.stereotype.Component
 
 /**
  * Serves as the producer of work for resource handlers, monitors and refills the work queue once all work is complete
@@ -46,8 +47,9 @@ class WorkQueueManager(
   private val queue: WorkQueue,
   private val clock: Clock,
   private val registry: Registry,
-  private val cacheStatus: CacheStatus
-) : DiscoveryActivated() {
+  private val cacheStatus: CacheStatus,
+  private val discoveryStatusListener: DiscoveryStatusListener
+) : ApplicationListener<RemoteStatusChangedEvent> {
   private val log: Logger = LoggerFactory.getLogger(javaClass)
   private val queueId = registry.createId("swabbie.work.queue")
   private val queueSizeId = registry.createId("swabbie.work.queueSize")
@@ -58,8 +60,8 @@ class WorkQueueManager(
       .monitorValue(queue.size())
   }
 
-  override fun onDiscoveryUpCallback(event: RemoteStatusChangedEvent) {
-    if (isEnabled()) {
+  override fun onApplicationEvent(event: RemoteStatusChangedEvent) {
+    if (event.source.isUp) {
       ensureLoadedCaches()
       queue.refillOnEmpty()
     }
@@ -71,7 +73,7 @@ class WorkQueueManager(
    */
   @Scheduled(fixedDelayString = "\${swabbie.queue.monitor-interval-ms:900000}")
   fun monitor() {
-    if (!isUp()) {
+    if (!discoveryStatusListener.isEnabled) {
       // do nothing, we're down in discovery and we want active instances to control the queue
       return
     }

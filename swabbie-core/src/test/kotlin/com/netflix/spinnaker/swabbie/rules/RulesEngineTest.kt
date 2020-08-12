@@ -27,15 +27,15 @@ import com.netflix.spinnaker.swabbie.test.TEST_RESOURCE_PROVIDER_TYPE
 import com.netflix.spinnaker.swabbie.test.TEST_RESOURCE_TYPE
 import com.netflix.spinnaker.swabbie.test.TestResource
 import com.netflix.spinnaker.swabbie.test.WorkConfigurationTestHelper
-import org.junit.jupiter.api.Test
-import strikt.api.expectThat
-import strikt.assertions.isEmpty
-import strikt.assertions.containsExactlyInAnyOrder
-import strikt.assertions.containsExactly
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
+import org.junit.jupiter.api.Test
+import strikt.api.expectThat
+import strikt.assertions.containsExactly
+import strikt.assertions.containsExactlyInAnyOrder
+import strikt.assertions.isEmpty
 
 object RulesEngineTest {
   private val clock = Clock.fixed(Instant.now(), ZoneId.systemDefault())
@@ -162,15 +162,15 @@ object RulesEngineTest {
   /**
    * ------------------ config sample AND and OR rules---
    * enabledRules:
-      - operator: AND
-        description: Resource is expired and is disabled
-        rules:
-          - name: ExpiredResourceRule
-          - name: DisabledResourceRule
-      - operator: OR
-        description: Resource has no application
-        rules:
-          - name: NoApplicationRule
+   - operator: AND
+   description: Resource is expired and is disabled
+   rules:
+   - name: ExpiredResourceRule
+   - name: DisabledResourceRule
+   - operator: OR
+   description: Resource has no application
+   rules:
+   - name: NoApplicationRule
    *-----------------------------------------------------
    */
 
@@ -210,13 +210,13 @@ object RulesEngineTest {
   /**
    * ------------------ config sample OR---
    * enabledRules:
-      - operator: OR
-        description: Applies if resource is older than a year or has expired
-        rules:
-          - name: ExpiredResourceRule
-          - name: AgeRule
-            parameters:
-              olderThanDays: 365
+   - operator: OR
+   description: Applies if resource is older than a year or has expired
+   rules:
+   - name: ExpiredResourceRule
+   - name: AgeRule
+   parameters:
+   olderThanDays: 365
    *-------------------------------
    */
   @Test
@@ -268,15 +268,15 @@ object RulesEngineTest {
   /**
    * ------------------ config sample AND---
    * enabledRules:
-      - operator: AND
-        description: Resource is older than a year and has been disabled longer than 30 days
-        rules:
-          - name: DisabledResourceRule
-            parameters:
-              longerThanDays: 30
-          - name: AgeRule
-            parameters:
-              olderThanDays: 365
+   - operator: AND
+   description: Resource is older than a year and has been disabled longer than 30 days
+   rules:
+   - name: DisabledResourceRule
+   parameters:
+   longerThanDays: 30
+   - name: AgeRule
+   parameters:
+   olderThanDays: 365
    *-------------------------------
    */
   @Test

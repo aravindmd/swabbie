@@ -21,18 +21,11 @@ package com.netflix.spinnaker.swabbie.orca
 import com.netflix.spectator.api.Id
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.kork.core.RetrySupport
-import com.netflix.spinnaker.kork.eureka.RemoteStatusChangedEvent
+import com.netflix.spinnaker.kork.discovery.RemoteStatusChangedEvent
 import com.netflix.spinnaker.kork.lock.LockManager
 import com.netflix.spinnaker.swabbie.LockingService
-import com.netflix.spinnaker.swabbie.discovery.DiscoveryActivated
 import com.netflix.spinnaker.swabbie.events.OrcaTaskFailureEvent
 import com.netflix.spinnaker.swabbie.repository.TaskTrackingRepository
-import net.logstash.logback.argument.StructuredArguments.kv
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
-import org.springframework.context.ApplicationEventPublisher
-import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -43,6 +36,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.annotation.PostConstruct
 import javax.annotation.PreDestroy
+import net.logstash.logback.argument.StructuredArguments.kv
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.ApplicationEventPublisher
+import org.springframework.context.ApplicationListener
+import org.springframework.stereotype.Component
 
 @Component
 class OrcaTaskMonitoringAgent(
@@ -53,7 +53,7 @@ class OrcaTaskMonitoringAgent(
   private val applicationEventPublisher: ApplicationEventPublisher,
   private val retrySupport: RetrySupport,
   private val lockingService: Optional<LockingService>
-) : DiscoveryActivated() {
+) : ApplicationListener<RemoteStatusChangedEvent> {
 
   private val log: Logger = LoggerFactory.getLogger(javaClass)
   private val executorService = Executors.newSingleThreadScheduledExecutor()
@@ -62,14 +62,17 @@ class OrcaTaskMonitoringAgent(
   private val timeoutMillis: Long = 5000
   private val maxAttempts: Int = 3
 
-  override fun onDiscoveryUpCallback(event: RemoteStatusChangedEvent) {
-    executorService.scheduleWithFixedDelay({
-      withLocking(javaClass.simpleName) { monitorOrcaTasks() }
-    }, getAgentDelay(), getAgentFrequency(), TimeUnit.SECONDS)
-  }
-
-  override fun onDiscoveryDownCallback(event: RemoteStatusChangedEvent) {
-    stop()
+  override fun onApplicationEvent(event: RemoteStatusChangedEvent) {
+    if (event.source.isUp) {
+      executorService.scheduleWithFixedDelay(
+        {
+          withLocking(javaClass.simpleName) { monitorOrcaTasks() }
+        },
+        getAgentDelay(), getAgentFrequency(), TimeUnit.SECONDS
+      )
+    } else {
+      stop()
+    }
   }
 
   @PostConstruct
@@ -162,9 +165,12 @@ class OrcaTaskMonitoringAgent(
   }
 
   private fun getTask(taskId: String): TaskDetailResponse =
-    retrySupport.retry({
-      orcaService.getTask(taskId)
-    }, maxAttempts, timeoutMillis, false)
+    retrySupport.retry(
+      {
+        orcaService.getTask(taskId)
+      },
+      maxAttempts, timeoutMillis, false
+    )
 
   private fun clean() {
     taskTrackingRepository.cleanUpFinishedTasks(daysToKeepTasks)

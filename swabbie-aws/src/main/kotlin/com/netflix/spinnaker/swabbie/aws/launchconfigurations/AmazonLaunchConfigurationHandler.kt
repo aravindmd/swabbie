@@ -34,17 +34,17 @@ import com.netflix.spinnaker.swabbie.notifications.Notifier
 import com.netflix.spinnaker.swabbie.orca.OrcaJob
 import com.netflix.spinnaker.swabbie.orca.OrcaService
 import com.netflix.spinnaker.swabbie.orca.OrchestrationRequest
+import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
+import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
+import com.netflix.spinnaker.swabbie.repository.ResourceUseTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.TaskCompleteEventInfo
 import com.netflix.spinnaker.swabbie.repository.TaskTrackingRepository
-import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
-import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
-import com.netflix.spinnaker.swabbie.repository.ResourceUseTrackingRepository
 import com.netflix.spinnaker.swabbie.rules.RulesEngine
 import com.netflix.spinnaker.swabbie.utils.ApplicationUtils
-import org.springframework.context.ApplicationEventPublisher
-import org.springframework.stereotype.Component
 import java.time.Clock
 import kotlin.system.measureTimeMillis
+import org.springframework.context.ApplicationEventPublisher
+import org.springframework.stereotype.Component
 
 @Component
 class AmazonLaunchConfigurationHandler(
@@ -176,8 +176,10 @@ class AmazonLaunchConfigurationHandler(
       setServerGroupReferences(launchConfigurations, params)
     }
 
-    log.info("Completed checking references for {} launch configs in $elapsedTimeMillis ms. Params: {}",
-      launchConfigurations.size, params)
+    log.info(
+      "Completed checking references for {} launch configs in $elapsedTimeMillis ms. Params: {}",
+      launchConfigurations.size, params
+    )
   }
 
   private fun setServerGroupReferences(launchConfigurations: List<AmazonLaunchConfiguration>, params: Parameters) {

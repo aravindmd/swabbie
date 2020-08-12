@@ -31,12 +31,12 @@ import com.netflix.spinnaker.swabbie.model.SpinnakerAccount
 import com.nhaarman.mockito_kotlin.doReturn
 import com.nhaarman.mockito_kotlin.mock
 import com.nhaarman.mockito_kotlin.whenever
+import java.util.Optional
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import strikt.api.expectThat
 import strikt.assertions.contains
 import strikt.assertions.isEqualTo
-import java.util.Optional
 
 object WorkConfiguratorTest {
   private val accountProvider: AccountProvider = mock()
@@ -221,8 +221,10 @@ object WorkConfiguratorTest {
       )
 
     workConfigurator.generateWorkConfigurations().let { workConfigurations ->
-      assertEquals(workConfigurations.size, 2,
-        "excludes disabled securityGroup & ami because of the account exclusion by name")
+      assertEquals(
+        workConfigurations.size, 2,
+        "excludes disabled securityGroup & ami because of the account exclusion by name"
+      )
       with(workConfigurations[0]) {
         assertEquals("aws:test:us-east-1:loadbalancer", namespace, "granularity")
         assertEquals(false, dryRun, "dryRun is false")

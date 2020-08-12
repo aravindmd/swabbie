@@ -24,11 +24,11 @@ import com.netflix.spinnaker.swabbie.model.Status
 import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
 import com.netflix.spinnaker.swabbie.tagging.ResourceTagger
+import java.time.Clock
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Component
-import java.time.Clock
 
 @Component
 class ResourceStateManager(
@@ -60,7 +60,8 @@ class ResourceStateManager(
         resourceTagger?.tag(
           markedResource,
           workConfiguration,
-          description = "$normalizedName is scheduled to be deleted on $deletionDate")
+          description = "$normalizedName is scheduled to be deleted on $deletionDate"
+        )
       }
 
       is UnMarkResourceEvent -> {
@@ -68,7 +69,8 @@ class ResourceStateManager(
         resourceTagger?.unTag(
           markedResource,
           workConfiguration,
-          description = "$normalizedName is no longer a cleanup candidate")
+          description = "$normalizedName is no longer a cleanup candidate"
+        )
       }
 
       is OwnerNotifiedEvent -> {
@@ -76,7 +78,8 @@ class ResourceStateManager(
         resourceTagger?.tag(
           markedResource,
           workConfiguration,
-          description = "Notified $notifiedOwner about soon to be deleted $normalizedName")
+          description = "Notified $notifiedOwner about soon to be deleted $normalizedName"
+        )
       }
 
       is OptOutResourceEvent -> {
@@ -84,7 +87,8 @@ class ResourceStateManager(
         resourceTagger?.unTag(
           markedResource,
           workConfiguration,
-          description = "$normalizedName is opted out of deletion")
+          description = "$normalizedName is opted out of deletion"
+        )
       }
 
       is DeleteResourceEvent -> {
@@ -92,7 +96,8 @@ class ResourceStateManager(
         resourceTagger?.unTag(
           markedResource,
           workConfiguration,
-          description = "Removing tag for now deleted $normalizedName")
+          description = "Removing tag for now deleted $normalizedName"
+        )
       }
 
       is OrcaTaskFailureEvent -> {
@@ -114,19 +119,21 @@ class ResourceStateManager(
     val status = Status(statusName, clock.instant().toEpochMilli())
 
     currentState?.statuses?.add(status)
-    val newState = (currentState?.copy(
-      statuses = currentState.statuses,
-      markedResource = event.markedResource,
-      deleted = event is DeleteResourceEvent,
-      optedOut = event is OptOutResourceEvent,
-      currentStatus = status
-    ) ?: ResourceState(
-      markedResource = event.markedResource,
-      deleted = event is DeleteResourceEvent,
-      optedOut = event is OptOutResourceEvent,
-      statuses = mutableListOf(status),
-      currentStatus = status
-    ))
+    val newState = (
+      currentState?.copy(
+        statuses = currentState.statuses,
+        markedResource = event.markedResource,
+        deleted = event is DeleteResourceEvent,
+        optedOut = event is OptOutResourceEvent,
+        currentStatus = status
+      ) ?: ResourceState(
+        markedResource = event.markedResource,
+        deleted = event is DeleteResourceEvent,
+        optedOut = event is OptOutResourceEvent,
+        statuses = mutableListOf(status),
+        currentStatus = status
+      )
+      )
 
     resourceStateRepository.upsert(newState)
   }
