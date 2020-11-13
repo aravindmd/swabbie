@@ -40,6 +40,8 @@ const val INSTANCE = "instance"
 const val LOAD_BALANCER = "loadBalancer"
 const val SERVER_GROUP = "serverGroup"
 const val LAUNCH_CONFIGURATION = "launchConfiguration"
+const val LAUNCH_TEMPLATE = "launchTemplate"
+const val LAUNCH_TEMPLATE_VERSION = "launchTemplateVersion"
 const val SNAPSHOT = "snapshot"
 
 /** Provider Types **/
@@ -386,4 +388,9 @@ data class ResourceEvaluation(
   val wouldMark: Boolean,
   val wouldMarkReason: String,
   val summaries: List<Summary>
+)
+
+data class ResourcePartition(
+  var offsetMs: Long = 0,
+  val markedResources: List<MarkedResource>
 )

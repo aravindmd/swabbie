@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-package com.netflix.spinnaker.swabbie.aws.launchconfigurations
+package com.netflix.spinnaker.swabbie.aws.launchtemplates
 
+import com.amazonaws.services.autoscaling.model.LaunchTemplateSpecification
 import com.netflix.spectator.api.NoopRegistry
 import com.netflix.spinnaker.config.SwabbieProperties
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
@@ -23,11 +24,11 @@ import com.netflix.spinnaker.swabbie.ResourceOwnerResolver
 import com.netflix.spinnaker.swabbie.aws.AWS
 import com.netflix.spinnaker.swabbie.aws.Parameters
 import com.netflix.spinnaker.swabbie.aws.autoscalinggroups.AmazonAutoScalingGroup
-import com.netflix.spinnaker.swabbie.aws.launchconfigurations.AmazonLaunchConfigurationHandler.Companion.isUsedByServerGroups
+import com.netflix.spinnaker.swabbie.aws.launchtemplates.AmazonLaunchTemplateHandler.Companion.isUsedByServerGroups
 import com.netflix.spinnaker.swabbie.events.DeleteResourceEvent
 import com.netflix.spinnaker.swabbie.events.MarkResourceEvent
 import com.netflix.spinnaker.swabbie.model.AWS
-import com.netflix.spinnaker.swabbie.model.LAUNCH_CONFIGURATION
+import com.netflix.spinnaker.swabbie.model.LAUNCH_TEMPLATE
 import com.netflix.spinnaker.swabbie.model.MarkedResource
 import com.netflix.spinnaker.swabbie.model.NotificationInfo
 import com.netflix.spinnaker.swabbie.model.Rule
@@ -65,12 +66,12 @@ import strikt.assertions.isFalse
 import strikt.assertions.isNull
 import strikt.assertions.isTrue
 
-object AmazonLaunchConfigurationHandlerTest {
+object AmazonLaunchTemplateHandlerTest {
   private val aws = mock<AWS>()
   private val resourceRepository = mock<ResourceTrackingRepository>()
   private val resourceStateRepository = mock<ResourceStateRepository>()
   private val taskTrackingRepository = mock<TaskTrackingRepository>()
-  private val resourceOwnerResolver = mock<ResourceOwnerResolver<AmazonLaunchConfiguration>>()
+  private val resourceOwnerResolver = mock<ResourceOwnerResolver<AmazonLaunchTemplate>>()
   private val clock = Clock.fixed(Instant.now(), ZoneOffset.UTC)
   private val applicationEventPublisher = mock<ApplicationEventPublisher>()
   private val orcaService = mock<OrcaService>()
@@ -80,7 +81,7 @@ object AmazonLaunchConfigurationHandlerTest {
   private val rulesEngine = mock<ResourceRulesEngine>()
   private val ruleAndViolationPair = Pair<Rule, List<Summary>>(mock(), listOf(Summary("violate rule", ruleName = "rule")))
   private val workConfiguration = WorkConfigurationTestHelper
-    .generateWorkConfiguration(resourceType = LAUNCH_CONFIGURATION, cloudProvider = AWS)
+    .generateWorkConfiguration(resourceType = LAUNCH_TEMPLATE, cloudProvider = AWS)
 
   private val params = Parameters(
     account = workConfiguration.account.accountId!!,
@@ -88,7 +89,7 @@ object AmazonLaunchConfigurationHandlerTest {
     environment = workConfiguration.account.environment
   )
 
-  private val subject = AmazonLaunchConfigurationHandler(
+  private val subject = AmazonLaunchTemplateHandler(
     clock = clock,
     registry = NoopRegistry(),
     rulesEngine = rulesEngine,
@@ -109,24 +110,24 @@ object AmazonLaunchConfigurationHandlerTest {
   )
 
   private const val user = "test@netflix.com"
-  private val lc1 = AmazonLaunchConfiguration(
-    launchConfigurationName = "app-v001-001",
-    imageId = "ami-1",
+  private val lt1 = AmazonLaunchTemplate(
+    launchTemplateId = "app-v001-001",
+    launchTemplateName = "app-v001-001",
     createdTime = clock.millis()
   )
 
-  private val lc2 = AmazonLaunchConfiguration(
-    launchConfigurationName = "app-v002-002",
-    imageId = "ami-2",
+  private val lt2 = AmazonLaunchTemplate(
+    launchTemplateId = "app-v002-002",
+    launchTemplateName = "app-v002-002",
     createdTime = clock.millis()
   )
 
   @BeforeEach
   fun setup() {
-    lc1.details.clear()
-    lc2.details.clear()
+    lt1.details.clear()
+    lt2.details.clear()
     whenever(resourceOwnerResolver.resolve(any())) doReturn user
-    whenever(aws.getLaunchConfigurations(params)) doReturn listOf(lc1, lc2)
+    whenever(aws.getLaunchTemplates(params)) doReturn listOf(lt1, lt2)
     whenever(dynamicConfigService.getConfig(any(), any(), eq(workConfiguration.maxItemsProcessedPerCycle))) doReturn
       workConfiguration.maxItemsProcessedPerCycle
 
@@ -141,7 +142,7 @@ object AmazonLaunchConfigurationHandlerTest {
   }
 
   @Test
-  fun `should handle launch configurations`() {
+  fun `should handle launch templates`() {
     whenever(rulesEngine.getRules(workConfiguration)) doReturn listOf(ruleAndViolationPair.first)
     expectThat(subject.handles(workConfiguration)).isTrue()
 
@@ -150,13 +151,13 @@ object AmazonLaunchConfigurationHandlerTest {
   }
 
   @Test
-  fun `should get launch configurations`() {
+  fun `should get launch templates`() {
     expectThat(subject.getCandidates(workConfiguration)!!.count()).isEqualTo(2)
   }
 
   @Test
-  fun `should mark launch configurations`() {
-    whenever(rulesEngine.evaluate(any<AmazonLaunchConfiguration>(), any())) doReturn ruleAndViolationPair.second
+  fun `should mark launch templates`() {
+    whenever(rulesEngine.evaluate(any<AmazonLaunchTemplate>(), any())) doReturn ruleAndViolationPair.second
 
     subject.mark(workConfiguration)
 
@@ -171,27 +172,28 @@ object AmazonLaunchConfigurationHandlerTest {
       autoScalingGroupName = "app-v001",
       instances = listOf(),
       loadBalancerNames = listOf(),
+      launchTemplate = LaunchTemplateSpecification()
+        .withLaunchTemplateName(lt1.name)
+        .withLaunchTemplateId(lt1.resourceId),
       createdTime = clock.millis()
-    ).apply {
-      set("launchConfigurationName", lc1.name)
-    }
+    )
 
-    expectThat(lc1.details[isUsedByServerGroups]).isNull()
-    expectThat(lc2.details[isUsedByServerGroups]).isNull()
+    expectThat(lt1.details[isUsedByServerGroups]).isNull()
+    expectThat(lt2.details[isUsedByServerGroups]).isNull()
 
     whenever(aws.getServerGroups(params)) doReturn listOf(serverGroup)
 
-    subject.preProcessCandidates(listOf(lc1, lc2), workConfiguration)
+    subject.preProcessCandidates(listOf(lt1, lt2), workConfiguration)
 
-    expectThat(lc1.details[isUsedByServerGroups]).isEqualTo(true)
-    expectThat(lc2.details[isUsedByServerGroups]).isEqualTo(false)
+    expectThat(lt1.details[isUsedByServerGroups]).isEqualTo(true)
+    expectThat(lt2.details[isUsedByServerGroups]).isEqualTo(false)
   }
 
   @Test
-  fun `should delete launch configurations`() {
+  fun `should delete launch templates`() {
     val markedResources = listOf(
       MarkedResource(
-        resource = lc1,
+        resource = lt1,
         summaries = ruleAndViolationPair.second,
         namespace = workConfiguration.namespace,
         resourceOwner = user,
@@ -204,10 +206,10 @@ object AmazonLaunchConfigurationHandlerTest {
       )
     )
 
-    whenever(rulesEngine.evaluate(any<AmazonLaunchConfiguration>(), any())) doReturn ruleAndViolationPair.second
+    whenever(rulesEngine.evaluate(any<AmazonLaunchTemplate>(), any())) doReturn ruleAndViolationPair.second
     whenever(resourceRepository.getMarkedResourcesToDelete()) doReturn markedResources
 
-    whenever(aws.getLaunchConfigurations(params.copy(id = lc1.name))) doReturn listOf(lc1)
+    whenever(aws.getLaunchTemplates(params.copy(id = lt1.name))) doReturn listOf(lt1)
     whenever(orcaService.orchestrate(any())) doReturn TaskResponse(ref = "/tasks/1234")
 
     subject.delete(workConfiguration)

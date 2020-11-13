@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.netflix.spinnaker.swabbie.aws.launchconfigurations
+package com.netflix.spinnaker.swabbie.aws.launchtemplates
 
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.config.SwabbieProperties
@@ -26,7 +26,7 @@ import com.netflix.spinnaker.swabbie.aws.Parameters
 import com.netflix.spinnaker.swabbie.events.Action
 import com.netflix.spinnaker.swabbie.exclusions.ResourceExclusionPolicy
 import com.netflix.spinnaker.swabbie.model.AWS
-import com.netflix.spinnaker.swabbie.model.LAUNCH_CONFIGURATION
+import com.netflix.spinnaker.swabbie.model.LAUNCH_TEMPLATE
 import com.netflix.spinnaker.swabbie.model.ResourcePartition
 import com.netflix.spinnaker.swabbie.model.WorkConfiguration
 import com.netflix.spinnaker.swabbie.notifications.NotificationQueue
@@ -47,13 +47,13 @@ import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
 
 @Component
-class AmazonLaunchConfigurationHandler(
+class AmazonLaunchTemplateHandler(
   registry: Registry,
   clock: Clock,
   notifier: Notifier,
   resourceTrackingRepository: ResourceTrackingRepository,
   resourceStateRepository: ResourceStateRepository,
-  resourceOwnerResolver: ResourceOwnerResolver<AmazonLaunchConfiguration>,
+  resourceOwnerResolver: ResourceOwnerResolver<AmazonLaunchTemplate>,
   exclusionPolicies: List<ResourceExclusionPolicy>,
   applicationEventPublisher: ApplicationEventPublisher,
   swabbieProperties: SwabbieProperties,
@@ -65,7 +65,7 @@ class AmazonLaunchConfigurationHandler(
   private val taskTrackingRepository: TaskTrackingRepository,
   resourceUseTrackingRepository: ResourceUseTrackingRepository,
   notificationQueue: NotificationQueue
-) : AbstractResourceTypeHandler<AmazonLaunchConfiguration>(
+) : AbstractResourceTypeHandler<AmazonLaunchTemplate>(
   registry,
   clock,
   rulesEngine,
@@ -82,7 +82,7 @@ class AmazonLaunchConfigurationHandler(
 ) {
   override fun deleteResources(resourcePartition: ResourcePartition, workConfiguration: WorkConfiguration) {
     val application = applicationUtils.determineApp(resourcePartition.markedResources.first().resource)
-    val launchConfigurationNames = resourcePartition.markedResources
+    val launTemplateIds = resourcePartition.markedResources
       .map {
         it.resourceId
       }.toSet()
@@ -92,16 +92,16 @@ class AmazonLaunchConfigurationHandler(
         application = application,
         job = listOf(
           OrcaJob(
-            type = "deleteLaunchConfiguration",
+            type = "deleteLaunchTemplate",
             context = mutableMapOf(
               "credentials" to workConfiguration.account.name,
-              "launchConfigurationNames" to launchConfigurationNames,
+              "launchTemplateIds" to launTemplateIds,
               "cloudProvider" to AWS,
               "region" to workConfiguration.location
             )
           )
         ),
-        description = "Deleting LaunchConfigurations: $launchConfigurationNames"
+        description = "Deleting Launch Templates: $launTemplateIds"
       )
     ).let { taskResponse ->
       val completeEvent = TaskCompleteEventInfo(
@@ -116,25 +116,25 @@ class AmazonLaunchConfigurationHandler(
   }
 
   override fun handles(workConfiguration: WorkConfiguration): Boolean {
-    return workConfiguration.resourceType == LAUNCH_CONFIGURATION && workConfiguration.cloudProvider == AWS &&
+    return workConfiguration.resourceType == LAUNCH_TEMPLATE && workConfiguration.cloudProvider == AWS &&
       rulesEngine.getRules(workConfiguration).isNotEmpty()
   }
 
-  override fun getCandidates(workConfiguration: WorkConfiguration): List<AmazonLaunchConfiguration>? {
+  override fun getCandidates(workConfiguration: WorkConfiguration): List<AmazonLaunchTemplate>? {
     val params = Parameters(
       account = workConfiguration.account.accountId!!,
       region = workConfiguration.location,
       environment = workConfiguration.account.environment
     )
 
-    return aws.getLaunchConfigurations(params)
+    return aws.getLaunchTemplates(params)
   }
 
   override fun getCandidate(
     resourceId: String,
     resourceName: String,
     workConfiguration: WorkConfiguration
-  ): AmazonLaunchConfiguration? {
+  ): AmazonLaunchTemplate? {
     val params = Parameters(
       id = resourceId,
       account = workConfiguration.account.accountId!!,
@@ -142,17 +142,17 @@ class AmazonLaunchConfigurationHandler(
       environment = workConfiguration.account.environment
     )
 
-    return aws.getLaunchConfiguration(params)
+    return aws.getLaunchTemplate(params)
   }
 
   override fun preProcessCandidates(
-    candidates: List<AmazonLaunchConfiguration>,
+    candidates: List<AmazonLaunchTemplate>,
     workConfiguration: WorkConfiguration
-  ): List<AmazonLaunchConfiguration> {
+  ): List<AmazonLaunchTemplate> {
     return candidates
       .also {
         checkReferences(
-          launchConfigurations = it,
+          launchTemplates = it,
           params = Parameters(
             account = workConfiguration.account.accountId!!,
             region = workConfiguration.location,
@@ -166,31 +166,32 @@ class AmazonLaunchConfigurationHandler(
    * Checks references for:
    * Server Groups
    */
-  private fun checkReferences(launchConfigurations: List<AmazonLaunchConfiguration>?, params: Parameters) {
-    if (launchConfigurations.isNullOrEmpty()) {
+  private fun checkReferences(launchTemplates: List<AmazonLaunchTemplate>, params: Parameters) {
+    if (launchTemplates.isNullOrEmpty()) {
       return
     }
 
-    log.debug("checking references for {} launch configs. Parameters: {}", launchConfigurations.size, params)
+    log.debug("checking references for {} launch template. Parameters: {}", launchTemplates.size, params)
     val elapsedTimeMillis = measureTimeMillis {
-      setServerGroupReferences(launchConfigurations, params)
+      setServerGroupReferences(launchTemplates, params)
     }
 
     log.info(
-      "Completed checking references for {} launch configs in $elapsedTimeMillis ms. Params: {}",
-      launchConfigurations.size, params
+      "Completed checking references for {} launch templates in $elapsedTimeMillis ms. Params: {}",
+      launchTemplates.size, params
     )
   }
 
-  private fun setServerGroupReferences(launchConfigurations: List<AmazonLaunchConfiguration>, params: Parameters) {
-    val launchConfigsWithServerGroups = aws
+  private fun setServerGroupReferences(launchTemplates: List<AmazonLaunchTemplate>, params: Parameters) {
+    val launchTemplatesWithServerGroups = aws
       .getServerGroups(params)
+      .filter { it.launchTemplate != null }
       .map {
-        it.details["launchConfigurationName"]
+        it.launchTemplate!!.launchTemplateId
       }
 
-    launchConfigurations.forEach { lc ->
-      lc.set(isUsedByServerGroups, lc.name in launchConfigsWithServerGroups)
+    launchTemplates.forEach { lt ->
+      lt.set(isUsedByServerGroups, lt.resourceId in launchTemplatesWithServerGroups)
     }
   }
 

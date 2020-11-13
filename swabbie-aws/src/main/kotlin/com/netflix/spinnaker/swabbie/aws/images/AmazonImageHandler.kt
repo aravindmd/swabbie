@@ -26,6 +26,7 @@ import com.netflix.spinnaker.swabbie.aws.AWS
 import com.netflix.spinnaker.swabbie.aws.Parameters
 import com.netflix.spinnaker.swabbie.aws.caches.AmazonImagesUsedByInstancesCache
 import com.netflix.spinnaker.swabbie.aws.caches.AmazonLaunchConfigurationCache
+import com.netflix.spinnaker.swabbie.aws.caches.AmazonLaunchTemplateVersionCache
 import com.netflix.spinnaker.swabbie.events.Action
 import com.netflix.spinnaker.swabbie.exception.CacheSizeException
 import com.netflix.spinnaker.swabbie.exception.StaleCacheException
@@ -34,6 +35,7 @@ import com.netflix.spinnaker.swabbie.model.AWS
 import com.netflix.spinnaker.swabbie.model.IMAGE
 import com.netflix.spinnaker.swabbie.model.MarkedResource
 import com.netflix.spinnaker.swabbie.model.NAIVE_EXCLUSION
+import com.netflix.spinnaker.swabbie.model.ResourcePartition
 import com.netflix.spinnaker.swabbie.model.ResourceState
 import com.netflix.spinnaker.swabbie.model.SNAPSHOT
 import com.netflix.spinnaker.swabbie.model.WorkConfiguration
@@ -42,7 +44,7 @@ import com.netflix.spinnaker.swabbie.notifications.Notifier
 import com.netflix.spinnaker.swabbie.orca.OrcaJob
 import com.netflix.spinnaker.swabbie.orca.OrcaService
 import com.netflix.spinnaker.swabbie.orca.OrchestrationRequest
-import com.netflix.spinnaker.swabbie.orca.generateWaitStageWithRandWaitTime
+import com.netflix.spinnaker.swabbie.orca.generatedWaitStageWithFixedWaitTime
 import com.netflix.spinnaker.swabbie.repository.ResourceStateRepository
 import com.netflix.spinnaker.swabbie.repository.ResourceTrackingRepository
 import com.netflix.spinnaker.swabbie.repository.ResourceUseTrackingRepository
@@ -55,7 +57,6 @@ import java.time.Clock
 import java.time.Duration
 import kotlin.system.measureTimeMillis
 import net.logstash.logback.argument.StructuredArguments.kv
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
 
@@ -72,6 +73,7 @@ class AmazonImageHandler(
   dynamicConfigService: DynamicConfigService,
   private val launchConfigurationCache: InMemorySingletonCache<AmazonLaunchConfigurationCache>,
   private val imagesUsedByinstancesCache: InMemorySingletonCache<AmazonImagesUsedByInstancesCache>,
+  private val launchTemplateVersionCache: InMemorySingletonCache<AmazonLaunchTemplateVersionCache>,
   private val rulesEngine: RulesEngine,
   private val aws: AWS,
   private val orcaService: OrcaService,
@@ -97,35 +99,32 @@ class AmazonImageHandler(
   notificationQueue
 ) {
 
-  @Value("\${swabbie.clean.jitter-interval:600}")
-  private var cleanInterval: Long = 600
-
-  override fun deleteResources(markedResources: List<MarkedResource>, workConfiguration: WorkConfiguration) {
+  override fun deleteResources(resourcePartition: ResourcePartition, workConfiguration: WorkConfiguration) {
     orcaService.orchestrate(
       OrchestrationRequest(
         // resources are partitioned based on grouping, so find the app to use from first resource
-        application = applicationUtils.determineApp(markedResources.first().resource),
+        application = applicationUtils.determineApp(resourcePartition.markedResources.first().resource),
         job = listOf(
-          generateWaitStageWithRandWaitTime(cleanInterval),
+          generatedWaitStageWithFixedWaitTime(resourcePartition.offsetMs),
           OrcaJob(
             type = "deleteImage",
             context = mutableMapOf(
               "credentials" to workConfiguration.account.name,
-              "imageIds" to markedResources.map { it.resourceId }.toSet(),
+              "imageIds" to resourcePartition.markedResources.map { it.resourceId }.toSet(),
               "cloudProvider" to AWS,
               "region" to workConfiguration.location,
               "requisiteStageRefIds" to listOf("0")
             )
           )
         ),
-        description = "Deleting Images: ${markedResources.map { it.resourceId }}"
+        description = "Deleting Images: ${resourcePartition.markedResources.map { it.resourceId }}"
       )
     ).let { taskResponse ->
       taskTrackingRepository.add(
         taskResponse.taskId(),
         TaskCompleteEventInfo(
           action = Action.DELETE,
-          markedResources = markedResources,
+          markedResources = resourcePartition.markedResources,
           workConfiguration = workConfiguration,
           submittedTimeMillis = clock.instant().toEpochMilli()
         )
@@ -194,6 +193,7 @@ class AmazonImageHandler(
         setUsedByLaunchConfigurations(images, params)
         setUsedByInstances(images, params)
         setSeenWithinUnusedThreshold(images)
+        setUsedByLaunchTemplates(images, params)
       } catch (e: Exception) {
         log.error("Failed to check image references. Params: {}", params, e)
         throw IllegalStateException("Unable to process ${images.size} images. Params: $params", e)
@@ -238,6 +238,46 @@ class AmazonImageHandler(
           resourceUseTrackingRepository.recordUse(
             image.resourceId,
             usedByLaunchConfigs
+          )
+        }
+      }
+  }
+
+  /**
+   * Checks if images are used by launch templates in all accounts
+   */
+  private fun setUsedByLaunchTemplates(
+    images: List<AmazonImage>,
+    params: Parameters
+  ) {
+    if (launchTemplateVersionCache.get().getLastUpdated()
+      < clock.instant().toEpochMilli().minus(Duration.ofHours(1).toMillis())
+    ) {
+      throw StaleCacheException("Amazon launch template cache over 1 hour old, aborting.")
+    }
+    val imagesUsedByLaunchTemplatesForRegion = launchTemplateVersionCache.get().getRefdAmisForRegion(params.region).keys
+    log.info("Checking the {} images used by launch templates.", imagesUsedByLaunchTemplatesForRegion.size)
+    if (imagesUsedByLaunchTemplatesForRegion.size < swabbieProperties.minImagesUsedByLC) {
+      throw CacheSizeException(
+        "Amazon launch templates cache contains less than " +
+          "${swabbieProperties.minImagesUsedByLC} images used, aborting for safety."
+      )
+    }
+
+    images
+      .filter { NAIVE_EXCLUSION !in it.details }
+      .forEach { image ->
+        if (imagesUsedByLaunchTemplatesForRegion.contains(image.imageId)) {
+          log.debug("Image {} ({}) in {} is USED_BY_LAUNCH_TEMPLATES", image.imageId, image.name, params.region)
+          image.set(USED_BY_LAUNCH_TEMPLATES, true)
+
+          val usedByLaunchTemplates = launchTemplateVersionCache
+            .get().getLaunchTemplateVersionsByRegionForImage(params.copy(id = image.imageId))
+            .joinToString(",") { it.getAutoscalingGroupName() }
+
+          resourceUseTrackingRepository.recordUse(
+            image.resourceId,
+            usedByLaunchTemplates
           )
         }
       }
